@@ -10,6 +10,14 @@ class EmailData(BaseModel):
     body: str
     date: datetime
     attachments: list[str]
+    # IMAP flags
+    is_read: bool = False  # \Seen flag
+    is_answered: bool = False  # \Answered flag
+    is_flagged: bool = False  # \Flagged flag
+    is_deleted: bool = False  # \Deleted flag
+    is_draft: bool = False  # \Draft flag
+    is_recent: bool = False  # \Recent flag
+    flags: list[str] = []  # Raw flags from IMAP
 
     @classmethod
     def from_email(cls, email: dict[str, Any]):
@@ -19,6 +27,13 @@ class EmailData(BaseModel):
             body=email["body"],
             date=email["date"],
             attachments=email["attachments"],
+            is_read=email.get("is_read", False),
+            is_answered=email.get("is_answered", False),
+            is_flagged=email.get("is_flagged", False),
+            is_deleted=email.get("is_deleted", False),
+            is_draft=email.get("is_draft", False),
+            is_recent=email.get("is_recent", False),
+            flags=email.get("flags", []),
         )
 
 

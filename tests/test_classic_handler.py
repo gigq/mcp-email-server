@@ -106,9 +106,11 @@ class TestClassicEmailHandler:
 
                 # Verify the client methods were called correctly
                 classic_handler.incoming_client.get_emails_stream.assert_called_once_with(
-                    1, 10, now, None, "Test", None, None, "sender@example.com", None, "desc"
+                    1, 10, now, None, "Test", None, None, "sender@example.com", None, "desc", None, None
                 )
-                mock_count.assert_called_once_with(now, None, "Test", None, None, "sender@example.com", None)
+                mock_count.assert_called_once_with(
+                    now, None, "Test", None, None, "sender@example.com", None, None, None
+                )
 
     @pytest.mark.asyncio
     async def test_send_email(self, classic_handler):

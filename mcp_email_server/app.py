@@ -63,6 +63,17 @@ async def page_email(
         Literal["asc", "desc"],
         Field(default=None, description="Order emails by field. `asc` or `desc`."),
     ] = "desc",
+    is_unread: Annotated[
+        bool | None,
+        Field(default=None, description="Filter emails by read status. True for unread, False for read, None for all."),
+    ] = None,
+    is_flagged: Annotated[
+        bool | None,
+        Field(
+            default=None,
+            description="Filter emails by flagged status. True for flagged, False for unflagged, None for all.",
+        ),
+    ] = None,
 ) -> EmailPageResponse:
     handler = dispatch_handler(account_name)
 
@@ -77,6 +88,8 @@ async def page_email(
         from_address=from_address,
         to_address=to_address,
         order=order,
+        is_unread=is_unread,
+        is_flagged=is_flagged,
     )
 
 

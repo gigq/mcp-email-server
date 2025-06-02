@@ -139,6 +139,23 @@ class TestEmailClient:
         )
         assert criteria == ["SINCE", "01-JAN-2023", "SUBJECT", "Test", "FROM", "test@example.com"]
 
+        # Test with flag criteria
+        criteria = EmailClient._build_search_criteria(is_unread=True)
+        assert criteria == ["UNSEEN"]
+
+        criteria = EmailClient._build_search_criteria(is_unread=False)
+        assert criteria == ["SEEN"]
+
+        criteria = EmailClient._build_search_criteria(is_flagged=True)
+        assert criteria == ["FLAGGED"]
+
+        criteria = EmailClient._build_search_criteria(is_flagged=False)
+        assert criteria == ["UNFLAGGED"]
+
+        # Test combining flags with other criteria
+        criteria = EmailClient._build_search_criteria(subject="Test", is_unread=True, is_flagged=False)
+        assert criteria == ["SUBJECT", "Test", "UNSEEN", "UNFLAGGED"]
+
     @pytest.mark.asyncio
     async def test_get_emails_stream(self, email_client):
         """Test getting emails stream."""
@@ -193,6 +210,58 @@ This is the email body."""
                 mock_imap.uid_search.assert_called_once_with("ALL")
                 assert mock_imap.uid.call_count == 3
                 mock_imap.logout.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_emails_stream_with_flags(self, email_client):
+        """Test getting emails with flags."""
+        # Mock IMAP client
+        mock_imap = AsyncMock()
+        mock_imap._client_task = asyncio.Future()
+        mock_imap._client_task.set_result(None)
+        mock_imap.wait_hello_from_server = AsyncMock()
+        mock_imap.login = AsyncMock()
+        mock_imap.select = AsyncMock()
+        mock_imap.uid_search = AsyncMock(return_value=(None, [b"1"]))
+
+        # Create email with headers and include FLAGS in response
+        test_email = b"""From: sender@example.com\r
+To: recipient@example.com\r
+Subject: Test Subject\r
+Date: Mon, 1 Jan 2024 00:00:00 +0000\r
+\r
+This is the email body."""
+
+        # Mock UID fetch to return FLAGS along with email content
+        mock_imap.uid = AsyncMock(
+            return_value=(
+                None,
+                [b"1 FETCH (FLAGS (\\Seen \\Flagged) UID 1 RFC822 {%d}" % len(test_email), bytearray(test_email)],
+            )
+        )
+        mock_imap.logout = AsyncMock()
+
+        # Mock IMAP class
+        with patch.object(email_client, "imap_class", return_value=mock_imap):
+            emails = []
+            async for email_data in email_client.get_emails_stream(page=1, page_size=10, is_unread=False):
+                emails.append(email_data)
+
+            # We should get 1 email
+            assert len(emails) == 1
+            email = emails[0]
+
+            # Check flag data
+            assert email["is_read"] is True  # \\Seen flag is set
+            assert email["is_flagged"] is True  # \\Flagged flag is set
+            assert email["is_answered"] is False
+            assert email["is_deleted"] is False
+            assert email["is_draft"] is False
+            assert email["is_recent"] is False
+            assert "\\Seen" in email["flags"]
+            assert "\\Flagged" in email["flags"]
+
+            # Verify search was called with SEEN (not UNSEEN)
+            mock_imap.uid_search.assert_called_once_with("SEEN")
 
     @pytest.mark.asyncio
     async def test_get_email_count(self, email_client):
