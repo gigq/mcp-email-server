@@ -95,6 +95,8 @@ class EmailClient:
         from_address: str | None = None,
         to_address: str | None = None,
         order: str = "desc",
+        is_unread: bool | None = None,
+        is_flagged: bool | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         imap = self.imap_class(self.email_server.host, self.email_server.port)
         try:
@@ -110,7 +112,9 @@ class EmailClient:
                 logger.warning(f"IMAP ID command failed: {e!s}")
             await imap.select("INBOX")
 
-            search_criteria = self._build_search_criteria(before, since, subject, body, text, from_address, to_address)
+            search_criteria = self._build_search_criteria(
+                before, since, subject, body, text, from_address, to_address, is_unread, is_flagged
+            )
             logger.info(f"Get: Search criteria: {search_criteria}")
 
             # Search for messages - use UID SEARCH for better compatibility
@@ -137,7 +141,9 @@ class EmailClient:
 
                     # Fetch the email using UID - try different formats for compatibility
                     data = None
-                    fetch_formats = ["RFC822", "BODY[]", "BODY.PEEK[]", "(BODY.PEEK[])"]
+                    # Include FLAGS in fetch to get read/unread status
+                    # IMPORTANT: Use BODY.PEEK first to avoid marking messages as read
+                    fetch_formats = ["(BODY.PEEK[] FLAGS)", "BODY.PEEK[] FLAGS", "(BODY[] FLAGS)", "(RFC822 FLAGS)"]
 
                     for fetch_format in fetch_formats:
                         try:
@@ -173,26 +179,49 @@ class EmailClient:
                         logger.error(f"Failed to fetch UID {message_id_str} with any format")
                         continue
 
-                    # Find the email data in the response
+                    # Find the email data and flags in the response
                     raw_email = None
+                    email_flags = []
 
-                    # The email content is typically at index 1 as a bytearray
-                    if len(data) > 1 and isinstance(data[1], bytearray):
-                        raw_email = bytes(data[1])
-                    else:
-                        # Search through all items for email content
-                        for item in data:
-                            if isinstance(item, bytes | bytearray) and len(item) > 100:
-                                # Skip IMAP protocol responses
-                                if isinstance(item, bytes) and b"FETCH" in item:
-                                    continue
-                                # This is likely the email content
-                                raw_email = bytes(item) if isinstance(item, bytearray) else item
-                                break
+                    # Debug log the raw IMAP response structure
+                    logger.debug(f"IMAP response for UID {message_id_str}: {len(data)} items")
+                    for i, item in enumerate(data):
+                        if isinstance(item, bytes):
+                            logger.debug(f"  Item {i} (bytes): {item[:200]}...")  # First 200 bytes
+
+                    # Parse the IMAP response to extract both email content and flags
+                    for item in data:
+                        if isinstance(item, bytes) and b"FLAGS (" in item:
+                            # Extract flags from response like: b'1 FETCH (FLAGS (\\Seen \\Answered) RFC822 {size}'
+                            start = item.find(b"FLAGS (") + 7
+                            end = item.find(b")", start)
+                            if start > 6 and end > start:
+                                flags_str = item[start:end].decode("utf-8", errors="ignore")
+                                email_flags = flags_str.split()
+                                logger.debug(f"Parsed flags from IMAP: {email_flags}")
+
+                        if isinstance(item, bytes | bytearray) and len(item) > 100:
+                            # Skip IMAP protocol responses
+                            if (
+                                isinstance(item, bytes)
+                                and b"FETCH" in item
+                                and not (b"From:" in item or b"Subject:" in item)
+                            ):
+                                continue
+                            # This is likely the email content
+                            raw_email = bytes(item) if isinstance(item, bytearray) else item
 
                     if raw_email:
                         try:
                             parsed_email = self._parse_email_data(raw_email)
+                            # Add flag information to the parsed email
+                            parsed_email["flags"] = email_flags
+                            parsed_email["is_read"] = r"\Seen" in email_flags
+                            parsed_email["is_answered"] = r"\Answered" in email_flags
+                            parsed_email["is_flagged"] = r"\Flagged" in email_flags
+                            parsed_email["is_deleted"] = r"\Deleted" in email_flags
+                            parsed_email["is_draft"] = r"\Draft" in email_flags
+                            parsed_email["is_recent"] = r"\Recent" in email_flags
                             yield parsed_email
                         except Exception as e:
                             # Log error but continue with other emails
@@ -209,6 +238,19 @@ class EmailClient:
                 logger.info(f"Error during logout: {e}")
 
     @staticmethod
+    def _add_flag_criteria(search_criteria: list, is_unread: bool | None, is_flagged: bool | None) -> None:
+        """Add flag-based search criteria to the list."""
+        if is_unread is True:
+            search_criteria.append("UNSEEN")
+        elif is_unread is False:
+            search_criteria.append("SEEN")
+
+        if is_flagged is True:
+            search_criteria.append("FLAGGED")
+        elif is_flagged is False:
+            search_criteria.append("UNFLAGGED")
+
+    @staticmethod
     def _build_search_criteria(
         before: datetime | None = None,
         since: datetime | None = None,
@@ -217,6 +259,8 @@ class EmailClient:
         text: str | None = None,
         from_address: str | None = None,
         to_address: str | None = None,
+        is_unread: bool | None = None,
+        is_flagged: bool | None = None,
     ):
         search_criteria = []
         if before:
@@ -234,6 +278,9 @@ class EmailClient:
         if to_address:
             search_criteria.extend(["TO", to_address])
 
+        # Add flag-based search criteria
+        EmailClient._add_flag_criteria(search_criteria, is_unread, is_flagged)
+
         # If no specific criteria, search for ALL
         if not search_criteria:
             search_criteria = ["ALL"]
@@ -249,6 +296,8 @@ class EmailClient:
         text: str | None = None,
         from_address: str | None = None,
         to_address: str | None = None,
+        is_unread: bool | None = None,
+        is_flagged: bool | None = None,
     ) -> int:
         imap = self.imap_class(self.email_server.host, self.email_server.port)
         try:
@@ -259,7 +308,9 @@ class EmailClient:
             # Login and select inbox
             await imap.login(self.email_server.user_name, self.email_server.password)
             await imap.select("INBOX")
-            search_criteria = self._build_search_criteria(before, since, subject, body, text, from_address, to_address)
+            search_criteria = self._build_search_criteria(
+                before, since, subject, body, text, from_address, to_address, is_unread, is_flagged
+            )
             logger.info(f"Count: Search criteria: {search_criteria}")
             # Search for messages and count them - use UID SEARCH for consistency
             _, messages = await imap.uid_search(*search_criteria)
@@ -325,13 +376,17 @@ class ClassicEmailHandler(EmailHandler):
         from_address: str | None = None,
         to_address: str | None = None,
         order: str = "desc",
+        is_unread: bool | None = None,
+        is_flagged: bool | None = None,
     ) -> EmailPageResponse:
         emails = []
         async for email_data in self.incoming_client.get_emails_stream(
-            page, page_size, before, since, subject, body, text, from_address, to_address, order
+            page, page_size, before, since, subject, body, text, from_address, to_address, order, is_unread, is_flagged
         ):
             emails.append(EmailData.from_email(email_data))
-        total = await self.incoming_client.get_email_count(before, since, subject, body, text, from_address, to_address)
+        total = await self.incoming_client.get_email_count(
+            before, since, subject, body, text, from_address, to_address, is_unread, is_flagged
+        )
         return EmailPageResponse(
             page=page,
             page_size=page_size,

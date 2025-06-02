@@ -19,6 +19,14 @@ class TestEmailData:
         assert email_data.body == "Test Body"
         assert isinstance(email_data.date, datetime)
         assert email_data.attachments == ["file1.txt", "file2.pdf"]
+        # Check default flag values
+        assert email_data.is_read is False
+        assert email_data.is_answered is False
+        assert email_data.is_flagged is False
+        assert email_data.is_deleted is False
+        assert email_data.is_draft is False
+        assert email_data.is_recent is False
+        assert email_data.flags == []
 
     def test_from_email(self):
         """Test from_email class method."""
@@ -38,6 +46,42 @@ class TestEmailData:
         assert email_data.body == "Test Body"
         assert email_data.date == now
         assert email_data.attachments == ["file1.txt", "file2.pdf"]
+        # Check default flag values
+        assert email_data.is_read is False
+        assert email_data.is_answered is False
+        assert email_data.is_flagged is False
+        assert email_data.is_deleted is False
+        assert email_data.is_draft is False
+        assert email_data.is_recent is False
+        assert email_data.flags == []
+
+    def test_from_email_with_flags(self):
+        """Test from_email with flag data."""
+        now = datetime.now()
+        email_dict = {
+            "subject": "Test Subject",
+            "from": "test@example.com",
+            "body": "Test Body",
+            "date": now,
+            "attachments": [],
+            "is_read": True,
+            "is_answered": True,
+            "is_flagged": False,
+            "is_deleted": False,
+            "is_draft": False,
+            "is_recent": True,
+            "flags": ["\\Seen", "\\Answered", "\\Recent"],
+        }
+
+        email_data = EmailData.from_email(email_dict)
+
+        assert email_data.is_read is True
+        assert email_data.is_answered is True
+        assert email_data.is_flagged is False
+        assert email_data.is_deleted is False
+        assert email_data.is_draft is False
+        assert email_data.is_recent is True
+        assert email_data.flags == ["\\Seen", "\\Answered", "\\Recent"]
 
 
 class TestEmailPageResponse:
